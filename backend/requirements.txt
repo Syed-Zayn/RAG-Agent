@@ -12,4 +12,5 @@ sqlalchemy
 python-dotenv
 httpx
 requests
+docx2txt
 tiktoken
