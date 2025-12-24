@@ -127,7 +127,7 @@ if prompt := st.chat_input("Ask a question..."):
                     
                     st.markdown(answer)
                     
-                    if confidence > 0:
+                    if confidence > 20:
                         color = "green" if confidence > 70 else "orange"
                         st.markdown(f":{color}[**Confidence Score: {confidence}%**]")
                         
@@ -147,3 +147,4 @@ if prompt := st.chat_input("Ask a question..."):
                     })
                 except Exception as e:
                     st.error(f"Error: {e}")
+
