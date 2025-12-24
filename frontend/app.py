@@ -2,11 +2,8 @@ import streamlit as st
 import requests
 import uuid
 import os
-from dotenv import load_dotenv
-# Load Environment Variables
-load_dotenv()
-# Backend API URL
 
+# Backend URL Selection (Environment Variable or Fallback)
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="Professional RAG Assistant", layout="wide")
@@ -22,16 +19,29 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=50)
     st.title("User Profile")
     
-    # User Identification (Acts as Login)
-    username = st.text_input("👤 Your Username", value="zain", help="Files you upload will be linked to this name.")
+    # 1. Username Fix: No default value, placeholder added
+    username = st.text_input("👤 Your Username", value="", placeholder="Enter your name...", help="Files you upload will be linked to this name.")
     
     st.markdown("---")
     st.header("⚙️ Settings")
     
+    # Provider Selection
     provider = st.radio("Select AI Model:", ("OpenAI (GPT-3.5)", "Google (Gemini)"))
-    provider_key = "openai" if "OpenAI" in provider else "gemini"
-    api_key = st.text_input(f"🔑 {provider_key.title()} API Key", type="password")
+    provider_key_type = "openai" if "OpenAI" in provider else "gemini"
     
+    # 2. Smart API Key Logic (Environment vs Manual)
+    api_key = ""
+    env_key_name = "OPENAI_API_KEY" if provider_key_type == "openai" else "GOOGLE_API_KEY"
+    env_key_val = os.getenv(env_key_name)
+
+    if env_key_val:
+        # Agar Environment mein key majood hai
+        api_key = env_key_val
+        st.success(f"✅ {provider_key_type.title()} Key Loaded from System")
+    else:
+        # Agar Environment mein nahi hai, to Manual input dikhao
+        api_key = st.text_input(f"🔑 {provider_key_type.title()} API Key", type="password")
+
     st.markdown("---")
     st.subheader("📁 Upload Knowledge")
     
@@ -48,7 +58,7 @@ with st.sidebar:
             data = {
                 "username": username,
                 "privacy": privacy_val,
-                "provider": provider_key, 
+                "provider": provider_key_type, 
                 "api_key": api_key
             }
             
@@ -62,10 +72,17 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Connection Error: {e}")
         else:
-            st.warning("Please enter Username and API Key.")
+            if not username:
+                st.warning("⚠️ Please enter a Username.")
+            elif not api_key:
+                st.warning("⚠️ API Key is missing.")
 
 # --- Main Chat ---
-st.title(f"🤖 Welcome, {username}!")
+if username:
+    st.title(f"🤖 Welcome, {username}!")
+else:
+    st.title("🤖 Welcome, Guest!")
+
 st.markdown("Secure RAG System with **Role-Based Access Control**.")
 
 # Display History
@@ -82,7 +99,9 @@ for msg in st.session_state.messages:
 # Chat Input
 if prompt := st.chat_input("Ask a question..."):
     if not api_key:
-        st.error("Please enter API Key.")
+        st.error("❌ API Key is missing. Please set it in Settings or Environment Variables.")
+    elif not username:
+        st.error("❌ Please enter a username in the sidebar first.")
     else:
         st.chat_message("user").markdown(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -92,8 +111,8 @@ if prompt := st.chat_input("Ask a question..."):
                 payload = {
                     "query": prompt,
                     "session_id": st.session_state.session_id,
-                    "username": username,  # Send current user identity
-                    "provider": provider_key,
+                    "username": username,
+                    "provider": provider_key_type,
                     "api_key": api_key
                 }
                 try:
@@ -119,6 +138,4 @@ if prompt := st.chat_input("Ask a question..."):
                         "sources": sources
                     })
                 except Exception as e:
-
                     st.error(f"Error: {e}")
-
