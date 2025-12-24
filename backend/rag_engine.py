@@ -44,23 +44,35 @@ class RAGManager:
 
     def process_files(self, file_paths, username, privacy, provider, api_key):
         """
-        Reads files, adds metadata (User & Privacy), and saves to disk.
+        Reads files (PDF, TXT, DOCX), adds metadata, and saves to disk.
         """
         documents = []
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
+            
+            # --- NEW: Check File Type ---
             if file_path.endswith(".pdf"):
                 loader = PyPDFLoader(file_path)
+            elif file_path.endswith(".docx"):  # Word Files Support
+                loader = Docx2txtLoader(file_path)
             else:
                 loader = TextLoader(file_path)
+            # ----------------------------
             
-            docs = loader.load()
-            # Intelligent Metadata Tagging
-            for doc in docs:
-                doc.metadata["source"] = file_name
-                doc.metadata["owner"] = username  # "zain"
-                doc.metadata["privacy"] = privacy # "private" or "public"
-            documents.extend(docs)
+            try:
+                docs = loader.load()
+                # Intelligent Metadata Tagging
+                for doc in docs:
+                    doc.metadata["source"] = file_name
+                    doc.metadata["owner"] = username  # "zain"
+                    doc.metadata["privacy"] = privacy # "private" or "public"
+                documents.extend(docs)
+            except Exception as e:
+                print(f"❌ Error loading file {file_name}: {e}")
+                continue
+
+        if not documents:
+            return 0
 
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         splits = text_splitter.split_documents(documents)
@@ -71,8 +83,12 @@ class RAGManager:
         if self.vector_store is None:
             # Try loading first
             if os.path.exists(DB_PATH):
-                self.vector_store = FAISS.load_local(DB_PATH, embeddings, allow_dangerous_deserialization=True)
-                self.vector_store.add_documents(splits)
+                try:
+                    self.vector_store = FAISS.load_local(DB_PATH, embeddings, allow_dangerous_deserialization=True)
+                    self.vector_store.add_documents(splits)
+                except:
+                    # Agar load fail hojaye to naya banao
+                    self.vector_store = FAISS.from_documents(splits, embeddings)
             else:
                 self.vector_store = FAISS.from_documents(splits, embeddings)
         else:
@@ -101,7 +117,6 @@ class RAGManager:
             }
 
         # 1. Retrieve MORE docs first (fetch 15), then filter manually
-        # FAISS basic filtering is tricky, so we fetch more and filter in Python
         docs_and_scores = self.vector_store.similarity_search_with_score(query, k=15)
         
         filtered_results = []
@@ -146,32 +161,18 @@ class RAGManager:
                 min_distance = py_score
 
         # 3. Calculate Confidence
-        # 3. Calculate Confidence (Smart Scaling for UI)
         min_distance = float(min_distance)
         
-        # FAISS L2 Distance Logic:
-        # 0.0 to 0.3 = Exact/Very Close Match (Should be 90-100%)
-        # 0.3 to 0.5 = Good Semantic Match (Should be 70-90%)
-        # > 0.5 = Weak Match
-        
-        if min_distance < 0.2:
-            confidence = 98.0  # Almost exact match
-        elif min_distance < 0.4:
-            # Scale 0.2-0.4 distance to 85-98% range
-            confidence = 85.0 + ((0.4 - min_distance) * 65.0) 
-        elif min_distance < 0.6:
-            # Scale 0.4-0.6 distance to 60-85% range
-            confidence = 60.0 + ((0.6 - min_distance) * 125.0)
-        else:
-            confidence = max(0.0, (1.0 - min_distance) * 100.0)
-            
-        # Cap at 100
-        confidence = min(100.0, confidence)
+        # NOTE: Maine wahi purana formula rakha hai jo aapne diya tha.
+        # Agar aapko Green Score chahiye to mera "Smart Formula" use karein,
+        # lekin abhi aapne kaha "Logic same rakhna", to ye raha original:
+        confidence = max(0.0, (1.0 - min_distance) * 100.0)
 
         # 4. Generate Answer
         if provider == "openai":
             llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3, openai_api_key=api_key)
         else:
+            # Gemini Model name standard kar diya hai
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3, google_api_key=api_key)
 
         prompt_template = """
@@ -201,5 +202,4 @@ class RAGManager:
             "answer": response.content,
             "sources": sources,
             "confidence": float(round(confidence, 2))
-
         }
