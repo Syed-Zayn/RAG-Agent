@@ -9,7 +9,6 @@ from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_classic.schema import Document
 from langchain_classic.prompts import PromptTemplate
 
-
 # Folder to save the database permanently
 DB_PATH = "faiss_db_store"
 
@@ -18,13 +17,13 @@ class RAGManager:
         """Initialize and try to load existing DB from disk."""
         self.vector_store = None
         self.embeddings = None
-        # Hum baad mein embeddings init karein gy jab request ayegi,
-        # lekin agar disk par DB hai to load karna padega.
+        # Hum baad mein embeddings init karein gy jab request ayegi
 
     def _get_embeddings(self, provider, api_key):
         """Helper to get embedding object."""
         if provider == "openai":
-            return OpenAIEmbeddings(openai_api_key=api_key)
+            # Text-embedding-3-small is cheaper and better
+            return OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=api_key)
         elif provider == "gemini":
             return GoogleGenerativeAIEmbeddings(model="gemini-embedding-001", google_api_key=api_key)
         return None
@@ -50,7 +49,7 @@ class RAGManager:
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
             
-            # --- NEW: Check File Type ---
+            # --- Check File Type ---
             if file_path.endswith(".pdf"):
                 loader = PyPDFLoader(file_path)
             elif file_path.endswith(".docx"):  # Word Files Support
@@ -64,7 +63,7 @@ class RAGManager:
                 # Intelligent Metadata Tagging
                 for doc in docs:
                     doc.metadata["source"] = file_name
-                    doc.metadata["owner"] = username  # "zain"
+                    doc.metadata["owner"] = username  # e.g., "zain"
                     doc.metadata["privacy"] = privacy # "private" or "public"
                 documents.extend(docs)
             except Exception as e:
@@ -103,8 +102,6 @@ class RAGManager:
         """
         Retrieves context using Intelligent Filtering (Privacy Check).
         """
-        embeddings = self._get_embeddings(provider, api_key)
-        
         # Load DB if not in memory
         if self.vector_store is None:
             self.load_existing_db(provider, api_key)
@@ -162,17 +159,14 @@ class RAGManager:
 
         # 3. Calculate Confidence
         min_distance = float(min_distance)
-        
-        # NOTE: Maine wahi purana formula rakha hai jo aapne diya tha.
-        # Agar aapko Green Score chahiye to mera "Smart Formula" use karein,
-        # lekin abhi aapne kaha "Logic same rakhna", to ye raha original:
         confidence = max(0.0, (1.0 - min_distance) * 100.0)
 
         # 4. Generate Answer
         if provider == "openai":
-            llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3, openai_api_key=api_key)
+            # UPDATED: Using gpt-4o-mini (Best small/cheap model)
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, openai_api_key=api_key)
         else:
-            # Gemini Model name standard kar diya hai
+            # UPDATED: Using gemini-1.5-flash (Current standard flash model)
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3, google_api_key=api_key)
 
         prompt_template = """
@@ -205,4 +199,14 @@ class RAGManager:
             "confidence": float(round(confidence, 2))
         }
 
-
+# --- Quick Test Code (Agar direct run karna ho) ---
+if __name__ == "__main__":
+    # Apni API Keys yahan dalein ya Environment variables set karein
+    os.environ["OPENAI_API_KEY"] = "sk-..." 
+    
+    rag = RAGManager()
+    
+    # Example Usage:
+    # rag.process_files(["test.pdf"], "zain", "private", "openai", os.environ["OPENAI_API_KEY"])
+    # result = rag.get_answer("What is inside the pdf?", "", "zain", "openai", os.environ["OPENAI_API_KEY"])
+    # print(result)
