@@ -1,10 +1,12 @@
 import streamlit as st
 import requests
 import uuid
+import os
 from dotenv import load_dotenv
 # Load Environment Variables
 load_dotenv()
 # Backend API URL
+
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="Professional RAG Assistant", layout="wide")
@@ -119,3 +121,4 @@ if prompt := st.chat_input("Ask a question..."):
                 except Exception as e:
 
                     st.error(f"Error: {e}")
+
