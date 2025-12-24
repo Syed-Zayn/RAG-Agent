@@ -127,10 +127,11 @@ if prompt := st.chat_input("Ask a question..."):
                     
                     st.markdown(answer)
                     
-                    if confidence > 15 and "I cannot find the answer" not in answer:
+                    if confidence > 20:
                         color = "green" if confidence > 70 else "orange"
                         st.markdown(f":{color}[**Confidence Score: {confidence}%**]")
                         
+                        # Fix: Show only Top 2 Sources (CLEAN VERSION)
                         with st.expander("🔍 Verified Sources (Click to expand)"):
                             for i, src in enumerate(sources[:2]): 
                                 st.markdown(f"**{i+1}. {src['source']}**")
@@ -146,5 +147,4 @@ if prompt := st.chat_input("Ask a question..."):
                     })
                 except Exception as e:
                     st.error(f"Error: {e}")
-
 
