@@ -49,7 +49,7 @@ with st.sidebar:
     privacy_mode = st.radio("Visibility:", ("Private (Only me)", "Public (Everyone)"), index=0)
     privacy_val = "private" if "Private" in privacy_mode else "public"
     
-    uploaded_files = st.file_uploader("Choose PDF/TXT", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Choose PDF/TXT/DOCX", accept_multiple_files=True)
     
     if st.button("🚀 Process Documents"):
         if uploaded_files and api_key and username:
@@ -85,16 +85,20 @@ else:
 
 st.markdown("Secure RAG System with **Role-Based Access Control**.")
 
-# Display History
+# Display History (Clean Version)
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if "sources" in msg:
-            with st.expander("View Sources & Confidence"):
-                st.write(f"**Confidence Score:** {msg['confidence']}%")
-                for s in msg["sources"]:
-                    st.caption(f"📄 {s['source']} (Relevance: {s['score']:.4f})")
-                    st.text(s['content'][:200] + "...")
+        if "sources" in msg and msg["confidence"] > 0:
+            color = "green" if msg["confidence"] > 70 else "orange"
+            st.markdown(f":{color}[**Confidence Score: {msg['confidence']}%**]")
+            with st.expander("🔍 Verified Sources (Click to expand)"):
+                # Clean History View as well
+                for i, src in enumerate(msg["sources"][:2]):
+                    st.markdown(f"**{i+1}. {src['source']}**")
+                    st.caption(f'"{src["content"][:80]}..."')
+                    if i == 0:
+                        st.divider()
 
 # Chat Input
 if prompt := st.chat_input("Ask a question..."):
@@ -125,11 +129,15 @@ if prompt := st.chat_input("Ask a question..."):
                     
                     if confidence > 0:
                         color = "green" if confidence > 70 else "orange"
-                        st.markdown(f":{color}[**Confidence: {confidence}%**]")
-                        with st.expander("🔍 Verified Sources"):
-                            for src in sources:
-                                st.markdown(f"**Source:** `{src['source']}`")
-                                st.info(src['content'])
+                        st.markdown(f":{color}[**Confidence Score: {confidence}%**]")
+                        
+                        # Fix: Show only Top 2 Sources (CLEAN VERSION)
+                        with st.expander("🔍 Verified Sources (Click to expand)"):
+                            for i, src in enumerate(sources[:2]): 
+                                st.markdown(f"**{i+1}. {src['source']}**")
+                                st.caption(f'"{src["content"][:80]}..."') # Only 80 chars
+                                if i == 0:
+                                    st.divider()
                     
                     st.session_state.messages.append({
                         "role": "assistant", 
