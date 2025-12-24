@@ -176,7 +176,7 @@ class RAGManager:
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3, google_api_key=api_key)
 
         prompt_template = """
-        You are an intelligent Corporate Assistant. Answer the question strictly based on the provided Context.
+        You are an intelligent Corporate Assistant. Answer the question based on the provided Context.
         
         Chat History:
         {history}
@@ -187,8 +187,9 @@ class RAGManager:
         Question: {question}
 
         Guidelines:
-        - If the answer is not in the context, strictly say "I cannot find the answer in the provided documents."
-        - Cite the specific document name if available in the context.
+        1. Answer strictly based on the Context provided.
+        2. If the Context contains information about the topic but not the exact answer, summarize the Context relevant to the user's query.
+        3. ONLY say "I cannot find the answer in the provided documents" if the Context is completely irrelevant.
 
         Answer:
         """
@@ -203,4 +204,5 @@ class RAGManager:
             "sources": sources,
             "confidence": float(round(confidence, 2))
         }
+
 
