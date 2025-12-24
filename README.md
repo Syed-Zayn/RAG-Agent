@@ -8,7 +8,7 @@ Unlike basic RAG demos, this project emphasizes **security, transparency, confid
 
 ## 🌐 Live Links
 
-🔹 **Live Demo (Streamlit):** _[Add your Streamlit Cloud link here]_  
+🔹 **Live Demo (Streamlit):** awake-abundance-production.up.railway.app
 🔹 **Backend API:**  
 
 https://rag-agent-production-a165.up.railway.app
