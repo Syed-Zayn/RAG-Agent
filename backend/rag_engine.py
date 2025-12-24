@@ -146,8 +146,27 @@ class RAGManager:
                 min_distance = py_score
 
         # 3. Calculate Confidence
+        # 3. Calculate Confidence (Smart Scaling for UI)
         min_distance = float(min_distance)
-        confidence = max(0.0, (1.0 - min_distance) * 100.0)
+        
+        # FAISS L2 Distance Logic:
+        # 0.0 to 0.3 = Exact/Very Close Match (Should be 90-100%)
+        # 0.3 to 0.5 = Good Semantic Match (Should be 70-90%)
+        # > 0.5 = Weak Match
+        
+        if min_distance < 0.2:
+            confidence = 98.0  # Almost exact match
+        elif min_distance < 0.4:
+            # Scale 0.2-0.4 distance to 85-98% range
+            confidence = 85.0 + ((0.4 - min_distance) * 65.0) 
+        elif min_distance < 0.6:
+            # Scale 0.4-0.6 distance to 60-85% range
+            confidence = 60.0 + ((0.6 - min_distance) * 125.0)
+        else:
+            confidence = max(0.0, (1.0 - min_distance) * 100.0)
+            
+        # Cap at 100
+        confidence = min(100.0, confidence)
 
         # 4. Generate Answer
         if provider == "openai":
@@ -182,4 +201,5 @@ class RAGManager:
             "answer": response.content,
             "sources": sources,
             "confidence": float(round(confidence, 2))
+
         }
