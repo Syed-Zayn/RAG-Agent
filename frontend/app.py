@@ -3,12 +3,20 @@ import requests
 import uuid
 import os
 
-# Backend URL Selection (Environment Variable or Fallback)
+# Backend URL Selection
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
-st.set_page_config(page_title="Professional RAG Assistant", layout="wide")
+st.set_page_config(page_title="Professional RAG Assistant", layout="wide", page_icon="🤖")
 
-# Persistent Session
+# Custom CSS for Professional Look
+st.markdown("""
+<style>
+    .stChatFloatingInputContainer {bottom: 20px;}
+    .block-container {padding-top: 2rem;}
+</style>
+""", unsafe_allow_html=True)
+
+# Persistent Session State
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
@@ -16,45 +24,41 @@ if "messages" not in st.session_state:
 
 # --- Sidebar ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=50)
-    st.title("User Profile")
+    st.title("📂 Knowledge Control")
     
-    # 1. Username Fix: No default value, placeholder added
-    username = st.text_input("👤 Your Username", value="", placeholder="Enter your name...", help="Files you upload will be linked to this name.")
+    # User Identity
+    username = st.text_input("👤 Username", placeholder="Enter identity...", help="Access Control uses this name.")
     
-    st.markdown("---")
-    st.header("⚙️ Settings")
+    st.divider()
+    st.subheader("⚙️ Configuration")
     
-    # Provider Selection
-    provider = st.radio("Select AI Model:", ("OpenAI (GPT-3.5)", "Google (Gemini)"))
+    # Model Provider
+    provider = st.selectbox("AI Model", ("OpenAI (GPT-4o)", "Google (Gemini)"))
     provider_key_type = "openai" if "OpenAI" in provider else "gemini"
     
-    # 2. Smart API Key Logic (Environment vs Manual)
+    # API Key Logic
     api_key = ""
     env_key_name = "OPENAI_API_KEY" if provider_key_type == "openai" else "GOOGLE_API_KEY"
     env_key_val = os.getenv(env_key_name)
 
     if env_key_val:
-        # Agar Environment mein key majood hai
         api_key = env_key_val
-        st.success(f"✅ {provider_key_type.title()} Key Loaded from System")
+        st.success(f"✅ {provider_key_type.upper()} Key Active")
     else:
-        # Agar Environment mein nahi hai, to Manual input dikhao
-        api_key = st.text_input(f"🔑 {provider_key_type.title()} API Key", type="password")
+        api_key = st.text_input(f"🔑 Enter {provider_key_type.title()} Key", type="password")
 
-    st.markdown("---")
-    st.subheader("📁 Upload Knowledge")
+    st.divider()
     
-    # Privacy Toggle
-    privacy_mode = st.radio("Visibility:", ("Private (Only me)", "Public (Everyone)"), index=0)
+    # Upload Section
+    st.subheader("📄 Upload Documents")
+    privacy_mode = st.radio("Access Level:", ("Private (Session Only)", "Public (Organization)"), index=0)
     privacy_val = "private" if "Private" in privacy_mode else "public"
     
-    uploaded_files = st.file_uploader("Choose PDF/TXT/DOCX", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Supported: PDF, DOCX, TXT", accept_multiple_files=True)
     
-    if st.button("🚀 Process Documents"):
+    if st.button("🚀 Process & Ingest"):
         if uploaded_files and api_key and username:
             files = [("files", (file.name, file, file.type)) for file in uploaded_files]
-            
             data = {
                 "username": username,
                 "privacy": privacy_val,
@@ -62,89 +66,101 @@ with st.sidebar:
                 "api_key": api_key
             }
             
-            with st.spinner(f"Ingesting as {privacy_val.upper()} document..."):
+            with st.spinner("Processing vectors & indexing..."):
                 try:
                     res = requests.post(f"{BACKEND_URL}/upload/", files=files, data=data)
                     if res.status_code == 200:
-                        st.success(res.json()["message"])
+                        st.success("✅ Ingestion Complete!")
                     else:
                         st.error(f"Error: {res.text}")
                 except Exception as e:
                     st.error(f"Connection Error: {e}")
         else:
-            if not username:
-                st.warning("⚠️ Please enter a Username.")
-            elif not api_key:
-                st.warning("⚠️ API Key is missing.")
+            st.warning("⚠️ Missing Username or API Key.")
 
-# --- Main Chat ---
-if username:
-    st.title(f"🤖 Welcome, {username}!")
-else:
-    st.title("🤖 Welcome, Guest!")
+# --- Main Chat Interface ---
+st.title("🧠 Enterprise RAG Agent")
+st.caption(f"Session ID: {st.session_state.session_id} | Connected to: {provider}")
 
-st.markdown("Secure RAG System with **Role-Based Access Control**.")
+if not username:
+    st.info("👋 Please enter a **Username** in the sidebar to start.")
+    st.stop()
 
-# Display History (Clean Version)
+# Display Chat History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if "sources" in msg and msg["confidence"] > 0:
-            color = "green" if msg["confidence"] > 70 else "orange"
-            st.markdown(f":{color}[**Confidence Score: {msg['confidence']}%**]")
-            with st.expander("🔍 Verified Sources (Click to expand)"):
-                # Clean History View as well
-                for i, src in enumerate(msg["sources"][:2]):
-                    st.markdown(f"**{i+1}. {src['source']}**")
-                    st.caption(f'"{src["content"][:80]}..."')
-                    if i == 0:
+        
+        # Display Evidence (Only for Assistant)
+        if msg.get("role") == "assistant" and msg.get("confidence", 0) > 0:
+            conf = msg["confidence"]
+            # Color Logic
+            if conf >= 75: color = "green"
+            elif conf >= 50: color = "orange"
+            else: color = "red"
+            
+            st.markdown(f":{color}[**Confidence Score: {conf}%**]")
+            
+            # Citation Expander
+            if msg.get("sources"):
+                with st.expander("🔍 Verified Sources (Evidence)"):
+                    # Show Top 2 Sources Only (UI Cleanliness)
+                    for i, src in enumerate(msg["sources"][:2]):
+                        score_display = f"{src['score']}% Match"
+                        st.markdown(f"**{i+1}. {src['source']}** — *{score_display}*")
+                        st.caption(f'"{src["content"][:200]}..."') # Snippet
                         st.divider()
 
-# Chat Input
-if prompt := st.chat_input("Ask a question..."):
+# Chat Input Logic
+if prompt := st.chat_input("Ask about your documents..."):
     if not api_key:
-        st.error("❌ API Key is missing. Please set it in Settings or Environment Variables.")
-    elif not username:
-        st.error("❌ Please enter a username in the sidebar first.")
-    else:
-        st.chat_message("user").markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.error("Please provide an API Key in settings.")
+        st.stop()
         
-        with st.chat_message("assistant"):
-            with st.spinner("Searching secure knowledge base..."):
-                payload = {
-                    "query": prompt,
-                    "session_id": st.session_state.session_id,
-                    "username": username,
-                    "provider": provider_key_type,
-                    "api_key": api_key
-                }
-                try:
-                    res = requests.post(f"{BACKEND_URL}/chat/", json=payload).json()
-                    answer = res["answer"]
-                    confidence = res["confidence"]
-                    sources = res["sources"]
+    # User Message
+    st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    
+    # Assistant Response
+    with st.chat_message("assistant"):
+        with st.spinner("Analyzing vectors..."):
+            payload = {
+                "query": prompt,
+                "session_id": st.session_state.session_id,
+                "username": username,
+                "provider": provider_key_type,
+                "api_key": api_key
+            }
+            try:
+                res = requests.post(f"{BACKEND_URL}/chat/", json=payload).json()
+                
+                answer = res["answer"]
+                confidence = res["confidence"]
+                sources = res["sources"]
+                
+                st.markdown(answer)
+                
+                # Dynamic Footer based on Confidence
+                if confidence > 0:
+                    if confidence >= 75: color = "green"
+                    elif confidence >= 50: color = "orange"
+                    else: color = "red"
                     
-                    st.markdown(answer)
+                    st.markdown(f":{color}[**Confidence Score: {confidence}%**]")
                     
-                    if confidence > 20:
-                        color = "green" if confidence > 70 else "orange"
-                        st.markdown(f":{color}[**Confidence Score: {confidence}%**]")
-                        
-                        # Fix: Show only Top 2 Sources (CLEAN VERSION)
-                        with st.expander("🔍 Verified Sources (Click to expand)"):
+                    if sources:
+                        with st.expander("🔍 Verified Sources (Evidence)"):
                             for i, src in enumerate(sources[:2]): 
-                                st.markdown(f"**{i+1}. {src['source']}**")
-                                st.caption(f'"{src["content"][:80]}..."') # Only 80 chars
-                                if i == 0:
-                                    st.divider()
-                    
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": answer,
-                        "confidence": confidence,
-                        "sources": sources
-                    })
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
+                                st.markdown(f"**{i+1}. {src['source']}** — *{src['score']}% Relevance*")
+                                st.caption(f'"{src["content"][:200]}..."')
+                                st.divider()
+                
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": answer,
+                    "confidence": confidence,
+                    "sources": sources
+                })
+                
+            except Exception as e:
+                st.error(f"System Error: {e}")
