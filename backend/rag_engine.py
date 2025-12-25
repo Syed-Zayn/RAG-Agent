@@ -1,13 +1,17 @@
 import os
+import logging
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
-
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
-
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_classic.schema import Document
 from langchain_classic.prompts import PromptTemplate
+
+
+# Logging Setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Folder to save the database permanently
 DB_PATH = "faiss_db_store"
@@ -17,12 +21,11 @@ class RAGManager:
         """Initialize and try to load existing DB from disk."""
         self.vector_store = None
         self.embeddings = None
-        # Hum baad mein embeddings init karein gy jab request ayegi
 
     def _get_embeddings(self, provider, api_key):
         """Helper to get embedding object."""
         if provider == "openai":
-            # Text-embedding-3-small is cheaper and better
+            # Using text-embedding-3-small (Cheaper & Better)
             return OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=api_key)
         elif provider == "gemini":
             return GoogleGenerativeAIEmbeddings(model="gemini-embedding-001", google_api_key=api_key)
@@ -34,12 +37,12 @@ class RAGManager:
             embeddings = self._get_embeddings(provider, api_key)
             try:
                 self.vector_store = FAISS.load_local(DB_PATH, embeddings, allow_dangerous_deserialization=True)
-                print("✅ Loaded existing database from disk.")
+                logger.info("✅ Loaded existing database from disk.")
             except Exception as e:
-                print(f"⚠️ Could not load existing DB: {e}")
+                logger.error(f"⚠️ Could not load existing DB: {e}")
                 self.vector_store = None
         else:
-            print("ℹ️ No existing database found. Starting fresh.")
+            logger.info("ℹ️ No existing database found. Starting fresh.")
 
     def process_files(self, file_paths, username, privacy, provider, api_key):
         """
@@ -52,22 +55,21 @@ class RAGManager:
             # --- Check File Type ---
             if file_path.endswith(".pdf"):
                 loader = PyPDFLoader(file_path)
-            elif file_path.endswith(".docx"):  # Word Files Support
+            elif file_path.endswith(".docx"): 
                 loader = Docx2txtLoader(file_path)
             else:
                 loader = TextLoader(file_path)
-            # ----------------------------
             
             try:
                 docs = loader.load()
                 # Intelligent Metadata Tagging
                 for doc in docs:
                     doc.metadata["source"] = file_name
-                    doc.metadata["owner"] = username  # e.g., "zain"
-                    doc.metadata["privacy"] = privacy # "private" or "public"
+                    doc.metadata["owner"] = username
+                    doc.metadata["privacy"] = privacy
                 documents.extend(docs)
             except Exception as e:
-                print(f"❌ Error loading file {file_name}: {e}")
+                logger.error(f"❌ Error loading file {file_name}: {e}")
                 continue
 
         if not documents:
@@ -80,20 +82,18 @@ class RAGManager:
 
         # Update or Create Vector Store
         if self.vector_store is None:
-            # Try loading first
             if os.path.exists(DB_PATH):
                 try:
                     self.vector_store = FAISS.load_local(DB_PATH, embeddings, allow_dangerous_deserialization=True)
                     self.vector_store.add_documents(splits)
                 except:
-                    # Agar load fail hojaye to naya banao
                     self.vector_store = FAISS.from_documents(splits, embeddings)
             else:
                 self.vector_store = FAISS.from_documents(splits, embeddings)
         else:
             self.vector_store.add_documents(splits)
         
-        # SAVE TO DISK (Persistence Magic)
+        # SAVE TO DISK
         self.vector_store.save_local(DB_PATH)
         
         return len(splits)
@@ -163,10 +163,10 @@ class RAGManager:
 
         # 4. Generate Answer
         if provider == "openai":
-            # UPDATED: Using gpt-4o-mini (Best small/cheap model)
+            # UPDATED: Using gpt-4o-mini
             llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, openai_api_key=api_key)
         else:
-            # UPDATED: Using gemini-1.5-flash (Current standard flash model)
+            # UPDATED: Using gemini-1.5-flash
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3, google_api_key=api_key)
 
         prompt_template = """
@@ -198,15 +198,3 @@ class RAGManager:
             "sources": sources,
             "confidence": float(round(confidence, 2))
         }
-
-# --- Quick Test Code (Agar direct run karna ho) ---
-if __name__ == "__main__":
-    # Apni API Keys yahan dalein ya Environment variables set karein
-    os.environ["OPENAI_API_KEY"] = "sk-..." 
-    
-    rag = RAGManager()
-    
-    # Example Usage:
-    # rag.process_files(["test.pdf"], "zain", "private", "openai", os.environ["OPENAI_API_KEY"])
-    # result = rag.get_answer("What is inside the pdf?", "", "zain", "openai", os.environ["OPENAI_API_KEY"])
-    # print(result)
