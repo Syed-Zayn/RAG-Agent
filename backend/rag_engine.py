@@ -36,7 +36,7 @@ class RAGManager:
         - As distance increases, score drops rapidly (penalizing weak matches).
         """
         # Sensitivity factor (1.5 is strict, 1.0 is lenient)
-        sensitivity = 1.2  
+        sensitivity = 0.7  
         score = math.exp(-sensitivity * distance) * 100
         return round(score, 2)
 
@@ -208,3 +208,4 @@ class RAGManager:
             "sources": sources,
             "confidence": float(round(avg_confidence, 2))
         }
+
