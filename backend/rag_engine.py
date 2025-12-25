@@ -25,19 +25,27 @@ class RAGManager:
 
     def _calculate_confidence(self, distance):
         """
-        Boosted Confidence Score for Demo.
-        Real distance is often 0.8 - 1.2. We map this to 60-90% range for better UI.
+        Boosted Confidence Score Logic (0-100%)
         """
         dist = float(distance)
         if dist < 0: dist = 0.0
-        
-        # New Formula: More generous scaling
-        # If dist is 0.5 -> Score ~80%
-        # If dist is 1.0 -> Score ~65%
-        # If dist is 1.4 -> Score ~58%
-        score = 1.0 / (1.0 + (dist * 0.5)) 
-        
+        # Formula: Closer to 0 is better. 
+        # Map 0.4 distance -> ~71% confidence (Green)
+        # Map 0.8 distance -> ~55% confidence (Orange)
+        score = 1.0 / (1.0 + dist)
         return float(round(score * 100, 2))
+
+    def _format_history(self, history_list):
+        """
+        Convert raw List of Dicts to Clean Dialogue String.
+        Crucial for preventing LLM confusion.
+        """
+        history_text = ""
+        for msg in history_list:
+            role = "User" if msg['role'] == 'user' else "Assistant"
+            content = msg['content']
+            history_text += f"{role}: {content}\n"
+        return history_text if history_text else "No previous chat history."
 
     def load_existing_db(self, provider, api_key):
         if os.path.exists(DB_PATH):
@@ -77,7 +85,6 @@ class RAGManager:
         if not documents:
             return 0
 
-        # Chunk Size: Optimized for Context
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         splits = text_splitter.split_documents(documents)
 
@@ -117,7 +124,7 @@ class RAGManager:
         
         filtered_results = []
         
-        # 2. Filter by User Access
+        # 2. Filter by Access
         for doc, distance in docs_and_scores:
             doc_owner = doc.metadata.get("owner", "unknown")
             doc_privacy = doc.metadata.get("privacy", "private")
@@ -142,10 +149,7 @@ class RAGManager:
         best_distance = float(top_results[0][1])
         confidence = self._calculate_confidence(best_distance)
         
-        # --- MAJOR FIX: NO BLOCKING ---
-        # Removed the "if confidence < 28: return ..." block.
-        # Now we ALWAYS send context to LLM. 
-        # The LLM is smart enough to say "I don't know" if context is bad.
+        # NO BLOCKING: We trust the LLM to filter irrelevance now
         
         context_text = ""
         sources = []
@@ -162,30 +166,30 @@ class RAGManager:
                 "score": score
             })
 
-        # Calculate Average Precision
-        avg_precision = 0.0
-        if sources:
-            avg_precision = sum([s['score'] for s in sources]) / len(sources)
+        avg_precision = sum([s['score'] for s in sources]) / len(sources) if sources else 0.0
 
         # 4. LLM Generation
+        # Temperature 0.3 allows slight flexibility to connect "Delivery" with "Time Limit"
         if provider == "openai":
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, openai_api_key=api_key)
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, openai_api_key=api_key)
         else:
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.1, google_api_key=api_key)
+            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3, google_api_key=api_key)
 
-        # Prompt with clear instructions
+        # 5. FIXED PROMPT WITH FORMATTED HISTORY
+        formatted_history = self._format_history(history)
+        
         prompt_template = """
         You are an intelligent Corporate Assistant. 
-        Answer the question based strictly on the provided Context.
+        Your goal is to answer the user's question using the provided Context.
 
-        RULES:
-        1. If the context contains the answer (even partially), answer it.
-        2. If the user asks about "Time Limit", "Delivery", "Deadline", treat them as related terms.
-        3. If the Context is completely irrelevant (e.g., asking about cooking vs a tech manual), simply say: "I cannot find this information in the provided documents."
-        4. Cite the source name in brackets like [Source Name].
+        INSTRUCTIONS:
+        1. Read the Context carefully. If the answer is present, output it clearly.
+        2. Don't be too strict. If the user asks "What is RAG" and the document mentions "Mini-RAG Assistant Objective...", that IS the answer. Use it.
+        3. If the user asks about "Delivery" or "Time", look for "Time Limit" or "Deadlines".
+        4. Cite sources like [Source Name].
 
         Chat History:
-        {history}
+        {history_text}
 
         Context:
         {context}
@@ -195,8 +199,8 @@ class RAGManager:
         Answer:
         """
         
-        prompt = PromptTemplate(template=prompt_template, input_variables=["history", "context", "question"])
-        final_prompt = prompt.format(history=history, context=context_text, question=query)
+        prompt = PromptTemplate(template=prompt_template, input_variables=["history_text", "context", "question"])
+        final_prompt = prompt.format(history_text=formatted_history, context=context_text, question=query)
         
         try:
             response = llm.invoke(final_prompt)
