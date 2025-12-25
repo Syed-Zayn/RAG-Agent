@@ -13,8 +13,6 @@ from langchain_classic.schema import Document
 DB_PATH = "faiss_db_store"
 
 # --- CONFIGURATION ---
-# L2 Distance Threshold: Is se zyada distance hua to hum source ko reject kar denge
-# Lower implies stricter matching.
 SIMILARITY_THRESHOLD = 0.5  
 
 class RAGManager:
@@ -30,14 +28,16 @@ class RAGManager:
 
     def _calculate_confidence(self, distance):
         """
-        Converts L2 Distance to a Percentage Confidence Score using Inverse Logic.
-        Formula: 1 / (1 + distance)
-        This ensures non-linear accurate scoring.
+        Converts L2 Distance to a Percentage Confidence Score.
+        FIX: Explicitly casts inputs/outputs to standard Python floats to avoid NumPy serialization errors.
         """
-        if distance < 0: distance = 0
+        # Force convert numpy type to python float
+        dist = float(distance)
+        
+        if dist < 0: dist = 0.0
         # Inverse mapping: 0 distance = 100%, 1 distance = 50%
-        score = 1 / (1 + distance)
-        return round(score * 100, 2)
+        score = 1.0 / (1.0 + dist)
+        return float(round(score * 100, 2))
 
     def load_existing_db(self, provider, api_key):
         if os.path.exists(DB_PATH):
@@ -77,7 +77,7 @@ class RAGManager:
         if not documents:
             return 0
 
-        # Smart Splitting for better context preservation
+        # Smart Splitting
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
         splits = text_splitter.split_documents(documents)
 
@@ -112,7 +112,7 @@ class RAGManager:
                 "retrieval_quality": 0.0
             }
 
-        # 1. Retrieve Candidate Chunks (Fetch more, then filter)
+        # 1. Retrieve Candidate Chunks
         docs_and_scores = self.vector_store.similarity_search_with_score(query, k=10)
         
         filtered_results = []
@@ -122,10 +122,10 @@ class RAGManager:
             doc_owner = doc.metadata.get("owner", "unknown")
             doc_privacy = doc.metadata.get("privacy", "private")
             
-            # Access Control: (Owner matches OR File is Public)
             has_access = (doc_owner == username) or (doc_privacy == "public")
             
             if has_access:
+                # FIX: Ensure distance is just passed, we handle casting later
                 filtered_results.append((doc, distance))
 
         # 3. Handle "No Access" or "No Relevance"
@@ -142,26 +142,24 @@ class RAGManager:
         filtered_results.sort(key=lambda x: x[1])
         top_results = filtered_results[:3]
 
-        # Calculate weighted confidence
-        best_distance = top_results[0][1]
+        # Calculate weighted confidence with FIX
+        best_distance = float(top_results[0][1]) # Explicit cast
         confidence = self._calculate_confidence(best_distance)
         
-        # --- CRITICAL: THRESHOLD CHECK ---
-        # Agar best match bhi threshold se door hai, to reject kardo.
-        # This prevents Hallucinations on irrelevant queries.
-        if confidence < 45.0:  # If less than 45% sure
+        # --- THRESHOLD CHECK ---
+        if confidence < 45.0:
             return {
                 "answer": "I searched the knowledge base, but couldn't find sufficiently relevant information to answer this reliably.",
                 "sources": [],
-                "confidence": confidence, # Show low score
-                "retrieval_quality": confidence
+                "confidence": float(confidence), # Ensure float
+                "retrieval_quality": float(confidence)
             }
 
         context_text = ""
         sources = []
         
         for doc, dist in top_results:
-            score = self._calculate_confidence(dist)
+            score = self._calculate_confidence(dist) # This now returns a clean float
             source_name = f"{doc.metadata.get('source')} (Pg. {doc.metadata.get('page', 1)})"
             
             context_text += f"\n---\n[Source: {source_name}]\nContent: {doc.page_content}\n"
@@ -172,13 +170,17 @@ class RAGManager:
                 "score": score
             })
 
+        # Calculate Average Precision (Safe Math)
+        avg_precision = 0.0
+        if sources:
+            avg_precision = sum([s['score'] for s in sources]) / len(sources)
+
         # 5. LLM Generation
         if provider == "openai":
             llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, openai_api_key=api_key)
         else:
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2, google_api_key=api_key)
 
-        # Advanced Prompt for Grounding
         prompt_template = """
         You are a high-precision Corporate AI Assistant. Use the following retrieved Context to answer the user's question.
 
@@ -211,6 +213,6 @@ class RAGManager:
         return {
             "answer": answer_text,
             "sources": sources,
-            "confidence": confidence,
-            "retrieval_quality": sum([s['score'] for s in sources]) / len(sources) # Avg Precision
+            "confidence": float(confidence), # Double check cast
+            "retrieval_quality": float(round(avg_precision, 2)) # Double check cast
         }
