@@ -1,14 +1,12 @@
 import os
 import logging
-import numpy as np
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
-from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
-from langchain_classic.prompts import PromptTemplate
-
-from langchain_classic.schema import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.prompts import PromptTemplate
+from langchain.docstore.document import Document
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -37,19 +35,14 @@ class RAGManager:
 
     def _calculate_confidence(self, distance):
         """
-        DEMO-READY CONFIDENCE SCORING
-        Vector distance typically ranges from 0.7 to 1.4 for these models.
-        We map this to a 0-100% scale that looks good on UI (Green/High for matches).
+        Advanced Confidence Scoring.
+        Converts Vector L2 Distance to Percentage.
         """
         try:
             dist = float(distance)
             if dist < 0: dist = 0.0
-            
-            # SCALING FACTOR: Reduces the impact of distance to boost score
-            # Old: 1 / (1 + dist) -> 1 / 2.0 = 50%
-            # New: 1 / (1 + (dist * 0.25)) -> 1 / 1.25 = 80% (GREEN)
-            score = 1.0 / (1.0 + (dist * 0.25))
-            
+            # Formula: 1 / (1 + distance) maps distance to 0-100 scale gracefully
+            score = 1.0 / (1.0 + dist)
             return float(round(score * 100, 2))
         except:
             return 0.0
@@ -97,7 +90,7 @@ class RAGManager:
         if not documents:
             return 0
 
-        # Chunk Size: 1000 chars is optimal for detailed policies
+        # Advanced Splitting: Overlap is crucial for context continuity
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         splits = text_splitter.split_documents(documents)
 
@@ -120,28 +113,30 @@ class RAGManager:
 
     def _generate_query_variations(self, original_query, llm):
         """
-        MULTI-QUERY EXPANSION:
-        Generates synonyms to catch "Delivery" vs "Time Limit" mismatches.
+        ADVANCED TECHNIQUE: Multi-Query Expansion
+        Generates 3 different versions of the user's question to improve retrieval coverage.
         """
         prompt = PromptTemplate(
             input_variables=["question"],
-            template="""Generate 2 alternative versions of this user question to improve search retrieval. 
-            Focus on synonyms (e.g., 'delivery' -> 'deadline', 'cost' -> 'price').
-            Keep it short. Separate by newlines.
-            Question: {question}"""
+            template="""You are an AI language model assistant. Your task is to generate 3 different versions of the given user question to retrieve relevant documents from a vector database. 
+            By generating multiple perspectives on the user question, your goal is to help the user overcome some of the limitations of the distance-based similarity search. 
+            Provide these alternative questions separated by newlines.
+            Original question: {question}"""
         )
         
         try:
+            # We use a chain to get variations
             response = llm.invoke(prompt.format(question=original_query))
             variations = response.content.split('\n')
-            cleaned = [v.strip() for v in variations if v.strip()]
-            return cleaned[:2] 
+            # Clean up and keep non-empty lines
+            cleaned_variations = [v.strip() for v in variations if v.strip()]
+            return cleaned_variations[:3] # Limit to 3 variations
         except:
             return [original_query]
 
     def get_answer(self, query, history, username, provider, api_key):
         embeddings = self._get_embeddings(provider, api_key)
-        llm = self._get_llm(provider, api_key, temperature=0.1) # Low temp for factual accuracy
+        llm = self._get_llm(provider, api_key, temperature=0.2)
         
         if self.vector_store is None:
             self.load_existing_db(provider, api_key)
@@ -149,13 +144,18 @@ class RAGManager:
         if not self.vector_store:
             return {"answer": "⚠️ Database is empty.", "sources": [], "confidence": 0.0}
 
-        # --- STEP 1: SMART SEARCH (Multi-Query) ---
+        # --- STEP 1: MULTI-QUERY EXPANSION ---
+        # Instead of searching once, we search for synonyms too.
+        # e.g., "Delivery Time" -> searches for "Time Limit", "Deadline", "Schedule"
         queries_to_search = [query]
+        
+        # Only expand if query is short/ambiguous
         if len(query.split()) < 10:
             variations = self._generate_query_variations(query, llm)
             queries_to_search.extend(variations)
 
-        unique_docs = {}
+        # --- STEP 2: AGGREGATE SEARCH RESULTS ---
+        unique_docs = {} # Deduplication map
         
         for q in queries_to_search:
             docs_and_scores = self.vector_store.similarity_search_with_score(q, k=4)
@@ -166,22 +166,24 @@ class RAGManager:
                 has_access = (doc_owner == username) or (doc_privacy == "public")
                 
                 if has_access:
-                    # Deduplication key
+                    # Use content as key to prevent duplicates
                     content_hash = hash(doc.page_content)
                     if content_hash not in unique_docs:
                         unique_docs[content_hash] = (doc, distance)
                     else:
+                        # Keep the one with better score (lower distance)
                         if distance < unique_docs[content_hash][1]:
                             unique_docs[content_hash] = (doc, distance)
 
+        # Convert back to list and sort
         results = list(unique_docs.values())
-        results.sort(key=lambda x: x[1]) # Sort by best match
-        top_results = results[:3] # Keep Top 3
+        results.sort(key=lambda x: x[1]) # Sort by distance (asc)
+        top_results = results[:4] # Take top 4 unique matches
 
         if not top_results:
              return {"answer": "I couldn't find relevant info.", "sources": [], "confidence": 0.0}
 
-        # --- STEP 2: PREPARE SCORES (BOOSTED) ---
+        # --- STEP 3: PREPARE CONTEXT & SCORES ---
         best_distance = float(top_results[0][1])
         confidence = self._calculate_confidence(best_distance)
         
@@ -202,26 +204,30 @@ class RAGManager:
 
         avg_precision = sum([s['score'] for s in sources]) / len(sources) if sources else 0.0
 
-        # --- STEP 3: LOGIC PROMPT (Fixes 'Production' vs 'Prototype') ---
+        # --- STEP 4: CHAIN OF THOUGHT PROMPT ---
         formatted_history = self._format_history(history)
         
         prompt_template = """
         You are an advanced Corporate RAG Assistant. 
-        Answer the question using ONLY the provided Context.
+        Your task is to answer the user's question using the retrieved Context.
         
-        CRITICAL LOGIC RULES:
-        1. **Negative Inference:** If the document says the project is a "Prototype" or "Proof of Concept", and the user asks "Is this a full production app?", answer **NO**. Explain that it is a prototype.
-        2. **Synonym Matching:** "Delivery Time" = "Time Limit" or "Deadline".
-        3. **Grounding:** If the answer is not in Context, say "I cannot find this information".
-        4. **Citation:** Always append [Source Name] to your answer.
-
+        STRATEGY:
+        1. **Analyze:** Look at the user's question and the Context chunks.
+        2. **Connect:** Synonyms matter. If user asks "Delivery" and Context says "Time Limit", match them.
+        3. **Answer:** Provide a direct answer based on the context.
+        4. **Cite:** Always include the [Source Filename] for verification.
+        
+        STRICT RULES:
+        - If the Context supports the answer, give it confidently.
+        - If the Context is completely unrelated, say "I cannot find this information in the documents."
+        
         Chat History:
         {history}
 
-        Context:
+        Context from Documents:
         {context}
 
-        Question: {question}
+        User Question: {question}
 
         Answer:
         """
