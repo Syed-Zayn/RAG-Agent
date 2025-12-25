@@ -3,8 +3,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 import shutil
 import os
-# Note: Ensure you are running this from the root folder 
-# (uvicorn backend.main:app) so these imports work.
+
+# Imports form local files
 from rag_engine import RAGManager
 from database import init_db, add_message, get_chat_history
 
@@ -21,20 +21,20 @@ os.makedirs("data", exist_ok=True)
 class QueryRequest(BaseModel):
     query: str
     session_id: str
-    username: str   # NEW: Who is asking?
-    provider: str   # 'openai' or 'gemini'
+    username: str   
+    provider: str   
     api_key: str
 
 @app.post("/upload/")
 async def upload_files(
     files: List[UploadFile] = File(...),
-    username: str = Form(...),  # NEW: Owner of the file
-    privacy: str = Form(...),   # NEW: 'private' or 'public'
+    username: str = Form(...),  
+    privacy: str = Form(...),   
     provider: str = Form(...),
     api_key: str = Form(...)
 ):
     """
-    Endpoint to upload PDF/TXT files, tag them with User/Privacy, 
+    Endpoint to upload PDF/TXT/DOCX files, tag them with User/Privacy, 
     and ingest them into the Persistent Vector DB.
     """
     saved_paths = []
@@ -47,7 +47,6 @@ async def upload_files(
             saved_paths.append(file_location)
         
         # Process files with Metadata (Username & Privacy)
-        # Note: We pass provider/api_key to init embeddings if needed
         num_chunks = rag_manager.process_files(
             file_paths=saved_paths,
             username=username,
@@ -56,13 +55,16 @@ async def upload_files(
             api_key=api_key
         )
         
+        # Clean up temp files after processing (Optional, uncomment if needed)
+        # for path in saved_paths:
+        #     os.remove(path)
+        
         return {
             "status": "success", 
             "message": f"Successfully processed {len(files)} files into {num_chunks} chunks for user '{username}' ({privacy} mode)."
         }
     
     except Exception as e:
-        # Log error to console for debugging
         print(f"Error in upload: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -93,3 +95,5 @@ async def chat_endpoint(request: QueryRequest):
     except Exception as e:
         print(f"Error in chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Run with: uvicorn main:app --reload
