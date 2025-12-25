@@ -5,9 +5,10 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2t
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.prompts import PromptTemplate
-from langchain.docstore.document import Document
+from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
+from langchain_classic.prompts import PromptTemplate
+
+from langchain_classic.schema import Document
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -219,3 +220,4 @@ class RAGManager:
             "confidence": confidence,
             "retrieval_quality": float(round(avg_precision, 2))
         }
+
