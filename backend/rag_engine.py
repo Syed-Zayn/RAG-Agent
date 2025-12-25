@@ -25,7 +25,7 @@ class RAGManager:
         if provider == "openai":
             return OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=api_key)
         elif provider == "gemini":
-            return GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
+            return GoogleGenerativeAIEmbeddings(model="gemini-embedding-001", google_api_key=api_key)
         return None
     
     def _get_llm(self, provider, api_key, temperature=0.3):
@@ -33,7 +33,7 @@ class RAGManager:
         if provider == "openai":
             return ChatOpenAI(model="gpt-4o-mini", temperature=temperature, openai_api_key=api_key)
         elif provider == "gemini":
-            return ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=temperature, google_api_key=api_key)
+            return ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=temperature, google_api_key=api_key)
         return None
 
     def _calculate_confidence(self, distance):
@@ -241,3 +241,4 @@ class RAGManager:
             "confidence": confidence,
             "retrieval_quality": float(round(avg_precision, 2))
         }
+
