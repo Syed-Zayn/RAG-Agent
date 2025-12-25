@@ -113,24 +113,9 @@ class RAGManager:
         self.vector_store.save_local(DB_PATH)
         return len(splits)
 
-    def _generate_query_variations(self, original_query, llm):
-        prompt = PromptTemplate(
-            input_variables=["question"],
-            template="""Generate 2 synonyms or related questions for: "{question}".
-            Example: "Cost" -> "Price", "Budget".
-            Keep it simple. Return only the questions separated by newlines."""
-        )
-        try:
-            response = llm.invoke(prompt.format(question=original_query))
-            variations = response.content.split('\n')
-            cleaned = [v.strip() for v in variations if v.strip()]
-            return cleaned[:2] 
-        except:
-            return [original_query]
-
     def get_answer(self, query, history, username, provider, api_key):
         embeddings = self._get_embeddings(provider, api_key)
-        llm = self._get_llm(provider, api_key, temperature=0.3) # Increased Temp for better synthesis
+        llm = self._get_llm(provider, api_key, temperature=0.3) 
         
         if self.vector_store is None:
             self.load_existing_db(provider, api_key)
@@ -167,32 +152,42 @@ class RAGManager:
         if not top_results:
              return {"answer": "I couldn't find relevant info.", "sources": [], "confidence": 0.0}
 
-        # --- STEP 2: SCORES ---
+        # --- STEP 2: SCORES (Balanced Formula) ---
         best_distance = float(top_results[0][1])
-        confidence = self._calculate_confidence(best_distance)
+        # Thoda balance kiya: 0.2 ki jagah 0.3 (Taake garbage match 73% na ho, ~60% ho)
+        try:
+            score_val = 1.0 / (1.0 + (best_distance * 0.3))
+            confidence = float(round(score_val * 100, 2))
+        except:
+            confidence = 0.0
         
         context_text = ""
         sources = []
         for doc, dist in top_results:
-            score = self._calculate_confidence(dist)
+            try:
+                s_score = 1.0 / (1.0 + (float(dist) * 0.3))
+                s_score = float(round(s_score * 100, 2))
+            except: 
+                s_score = 0.0
+                
             source_label = doc.metadata.get('source', 'Unknown')
             context_text += f"\n---\n[Source: {source_label}]\nContent: {doc.page_content}\n"
-            sources.append({"source": source_label, "content": doc.page_content, "score": score})
+            sources.append({"source": source_label, "content": doc.page_content, "score": s_score})
 
         avg_precision = sum([s['score'] for s in sources]) / len(sources) if sources else 0.0
 
-        # --- STEP 3: FIXED PROMPT (The Solution) ---
+        # --- STEP 3: PROMPT ---
         formatted_history = self._format_history(history)
         
         prompt_template = """
         You are a smart Corporate RAG Assistant. 
         Your goal is to answer the user's question using the Context provided.
 
-        ### CRITICAL INSTRUCTIONS:
-        1. **Be Helpful:** If the user asks "What is X?" and the document describes X (e.g., "X is a project to do Y"), that IS the definition. Explain it.
-        2. **Don't Give Up:** Do not say "I cannot find this" unless the context is completely unrelated (e.g., Cooking recipes for a Tech question).
-        3. **Synthesize:** If the answer is spread across sentences, combine them.
-        4. **Citation:** Always add [Source Name] at the end.
+        ### INSTRUCTIONS:
+        1. **Check Context:** If the answer is in the text, explain it clearly.
+        2. **Definitions:** If asked "What is X?" and the text describes X, that is the answer.
+        3. **Negative Answers:** If the context is NOT related to the question (e.g., Question about "Elon Musk" but Context is about "RAG"), strictly say: "I cannot find this information in the provided documents."
+        4. **Citation:** Append [Source Name] at the end.
 
         Chat History:
         {history}
@@ -214,10 +209,19 @@ class RAGManager:
         except Exception as e:
             answer_text = f"Error from LLM: {str(e)}"
 
+        # --- STEP 4: SMART OVERRIDE (The Fix) ---
+        # Agar AI ne bola "Cannot find", to Confidence ZERO kar do.
+        keywords = ["cannot find", "no information", "not mentioned", "does not contain"]
+        if any(k in answer_text.lower() for k in keywords):
+            confidence = 0.0
+            avg_precision = 0.0
+            sources = [] # Hide sources to keep UI clean
+
         return {
             "answer": answer_text,
             "sources": sources,
             "confidence": confidence,
             "retrieval_quality": float(round(avg_precision, 2))
         }
+
 
