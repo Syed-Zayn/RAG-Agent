@@ -19,27 +19,24 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=50)
     st.title("User Profile")
     
-    # 1. Username Fix: No default value, placeholder added
     username = st.text_input("👤 Your Username", value="", placeholder="Enter your name...", help="Files you upload will be linked to this name.")
     
     st.markdown("---")
     st.header("⚙️ Settings")
     
     # Provider Selection
-    provider = st.radio("Select AI Model:", ("OpenAI (GPT-3.5)", "Google (Gemini)"))
+    provider = st.radio("Select AI Model:", ("OpenAI (GPT-4o Mini)", "Google (Gemini)"))
     provider_key_type = "openai" if "OpenAI" in provider else "gemini"
     
-    # 2. Smart API Key Logic (Environment vs Manual)
+    # Smart API Key Logic
     api_key = ""
     env_key_name = "OPENAI_API_KEY" if provider_key_type == "openai" else "GOOGLE_API_KEY"
     env_key_val = os.getenv(env_key_name)
 
     if env_key_val:
-        # Agar Environment mein key majood hai
         api_key = env_key_val
         st.success(f"✅ {provider_key_type.title()} Key Loaded from System")
     else:
-        # Agar Environment mein nahi hai, to Manual input dikhao
         api_key = st.text_input(f"🔑 {provider_key_type.title()} API Key", type="password")
 
     st.markdown("---")
@@ -85,20 +82,24 @@ else:
 
 st.markdown("Secure RAG System with **Role-Based Access Control**.")
 
-# Display History (Clean Version)
+# Display History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if "sources" in msg and msg["confidence"] > 0:
-            color = "green" if msg["confidence"] > 70 else "orange"
-            st.markdown(f":{color}[**Confidence Score: {msg['confidence']}%**]")
-            with st.expander("🔍 Verified Sources (Click to expand)"):
-                # Clean History View as well
-                for i, src in enumerate(msg["sources"][:2]):
-                    st.markdown(f"**{i+1}. {src['source']}**")
-                    st.caption(f'"{src["content"][:80]}..."')
-                    if i == 0:
-                        st.divider()
+        
+        # Display Sources only for Assistant
+        if msg["role"] == "assistant" and "sources" in msg:
+            conf = msg.get("confidence", 0.0)
+            if conf > 0:
+                color = "green" if conf > 70 else "orange" if conf > 40 else "red"
+                st.markdown(f":{color}[**Confidence Score: {conf}%**]")
+                
+                with st.expander("🔍 Verified Sources (Click to expand)"):
+                    for i, src in enumerate(msg["sources"][:3]):
+                        st.markdown(f"**{i+1}. {src['source']}**")
+                        st.caption(f'"{src["content"][:150]}..."')
+                        if i == 0:
+                            st.divider()
 
 # Chat Input
 if prompt := st.chat_input("Ask a question..."):
@@ -122,20 +123,19 @@ if prompt := st.chat_input("Ask a question..."):
                 try:
                     res = requests.post(f"{BACKEND_URL}/chat/", json=payload).json()
                     answer = res["answer"]
-                    confidence = res["confidence"]
-                    sources = res["sources"]
+                    confidence = res.get("confidence", 0.0)
+                    sources = res.get("sources", [])
                     
                     st.markdown(answer)
                     
-                    if confidence > 20:
-                        color = "green" if confidence > 70 else "orange"
+                    if confidence > 0:
+                        color = "green" if confidence > 70 else "orange" if confidence > 40 else "red"
                         st.markdown(f":{color}[**Confidence Score: {confidence}%**]")
                         
-                        # Fix: Show only Top 2 Sources (CLEAN VERSION)
-                        with st.expander("🔍 Verified Sources (Click to expand)"):
-                            for i, src in enumerate(sources[:2]): 
+                        with st.expander("🔍 Verified Sources"):
+                            for i, src in enumerate(sources[:3]): 
                                 st.markdown(f"**{i+1}. {src['source']}**")
-                                st.caption(f'"{src["content"][:80]}..."') # Only 80 chars
+                                st.caption(f'"{src["content"][:150]}..."') 
                                 if i == 0:
                                     st.divider()
                     
@@ -147,4 +147,3 @@ if prompt := st.chat_input("Ask a question..."):
                     })
                 except Exception as e:
                     st.error(f"Error: {e}")
-
