@@ -24,7 +24,7 @@ class RAGManager:
     def _get_embeddings(self, provider, api_key):
         """Helper to get embedding object."""
         if provider == "openai":
-            return OpenAIEmbeddings(openai_api_key=api_key)
+            return OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=api_key)
         elif provider == "gemini":
             return GoogleGenerativeAIEmbeddings(model="gemini-embedding-001", google_api_key=api_key)
         return None
@@ -170,7 +170,7 @@ class RAGManager:
 
         # 4. Generate Answer
         if provider == "openai":
-            llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.3, openai_api_key=api_key)
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, openai_api_key=api_key)
         else:
             # Gemini Model name standard kar diya hai
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.3, google_api_key=api_key)
@@ -204,5 +204,6 @@ class RAGManager:
             "sources": sources,
             "confidence": float(round(confidence, 2))
         }
+
 
 
