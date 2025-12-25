@@ -1,5 +1,5 @@
 import os
-import math
+import numpy as np
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
@@ -7,41 +7,39 @@ from langchain_community.vectorstores import FAISS
 from langchain_classic.text_splitter import RecursiveCharacterTextSplitter
 from langchain_classic.prompts import PromptTemplate
 
+from langchain_classic.schema import Document
+
 # Folder to save the database permanently
 DB_PATH = "faiss_db_store"
 
+# --- CONFIGURATION ---
+# L2 Distance Threshold: Is se zyada distance hua to hum source ko reject kar denge
+# Lower implies stricter matching.
+SIMILARITY_THRESHOLD = 0.5  
+
 class RAGManager:
     def __init__(self):
-        """Initialize and try to load existing DB from disk."""
         self.vector_store = None
-        self.embeddings = None
 
     def _get_embeddings(self, provider, api_key):
-        """Helper to get embedding object based on provider."""
         if provider == "openai":
             return OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=api_key)
         elif provider == "gemini":
             return GoogleGenerativeAIEmbeddings(model="gemini-embedding-001", google_api_key=api_key)
         return None
 
-    def _calculate_advanced_score(self, distance):
+    def _calculate_confidence(self, distance):
         """
-        ADVANCED SCORING MECHANISM: Exponential Decay.
-        Converts L2 Distance (0 to infinity) into a Probability (0% to 100%).
-        
-        Formula: Score = e^(-1.5 * distance) * 100
-        
-        Why this logic?
-        - Small distances (high similarity) get very high scores.
-        - As distance increases, score drops rapidly (penalizing weak matches).
+        Converts L2 Distance to a Percentage Confidence Score using Inverse Logic.
+        Formula: 1 / (1 + distance)
+        This ensures non-linear accurate scoring.
         """
-        # Sensitivity factor (1.5 is strict, 1.0 is lenient)
-        sensitivity = 0.7  
-        score = math.exp(-sensitivity * distance) * 100
-        return round(score, 2)
+        if distance < 0: distance = 0
+        # Inverse mapping: 0 distance = 100%, 1 distance = 50%
+        score = 1 / (1 + distance)
+        return round(score * 100, 2)
 
     def load_existing_db(self, provider, api_key):
-        """Loads the FAISS index from disk if it exists."""
         if os.path.exists(DB_PATH):
             embeddings = self._get_embeddings(provider, api_key)
             try:
@@ -51,17 +49,13 @@ class RAGManager:
                 print(f"⚠️ Could not load existing DB: {e}")
                 self.vector_store = None
         else:
-            print("ℹ️ No existing database found. Starting fresh.")
+            print("ℹ️ No existing database found.")
 
     def process_files(self, file_paths, username, privacy, provider, api_key):
-        """
-        Reads files (PDF, TXT, DOCX), adds metadata, and saves to disk.
-        """
         documents = []
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
             
-            # Detect File Type
             if file_path.endswith(".pdf"):
                 loader = PyPDFLoader(file_path)
             elif file_path.endswith(".docx"):
@@ -71,11 +65,10 @@ class RAGManager:
             
             try:
                 docs = loader.load()
-                # Intelligent Metadata Tagging (RBAC Core)
                 for doc in docs:
                     doc.metadata["source"] = file_name
                     doc.metadata["owner"] = username
-                    doc.metadata["privacy"] = privacy # "private" or "public"
+                    doc.metadata["privacy"] = privacy
                 documents.extend(docs)
             except Exception as e:
                 print(f"❌ Error loading file {file_name}: {e}")
@@ -84,13 +77,12 @@ class RAGManager:
         if not documents:
             return 0
 
-        # Chunking Strategy: Optimized for Context Retention
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        # Smart Splitting for better context preservation
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
         splits = text_splitter.split_documents(documents)
 
         embeddings = self._get_embeddings(provider, api_key)
 
-        # Update or Create Vector Store
         if self.vector_store is None:
             if os.path.exists(DB_PATH):
                 try:
@@ -107,81 +99,94 @@ class RAGManager:
         return len(splits)
 
     def get_answer(self, query, history, username, provider, api_key):
-        """
-        Retrieves context with STRICT filtering and Advanced Scoring.
-        """
-        # 1. Init Logic
         embeddings = self._get_embeddings(provider, api_key)
+        
         if self.vector_store is None:
             self.load_existing_db(provider, api_key)
 
         if not self.vector_store:
             return {
-                "answer": "Knowledge base is empty. Please upload documents first.", 
+                "answer": "⚠️ System is empty. Please upload documents first.", 
                 "sources": [], 
-                "confidence": 0.0
+                "confidence": 0.0,
+                "retrieval_quality": 0.0
             }
 
-        # 2. Retrieve Broad Set (k=15) then Filter (RBAC)
-        docs_and_scores = self.vector_store.similarity_search_with_score(query, k=15)
+        # 1. Retrieve Candidate Chunks (Fetch more, then filter)
+        docs_and_scores = self.vector_store.similarity_search_with_score(query, k=10)
         
         filtered_results = []
         
-        # 3. Privacy & Owner Filter
+        # 2. Strict Privacy & Relevance Filtering
         for doc, distance in docs_and_scores:
             doc_owner = doc.metadata.get("owner", "unknown")
             doc_privacy = doc.metadata.get("privacy", "private")
             
-            # RBAC Logic: Access if (File is Mine) OR (File is Public)
-            if doc_owner == username or doc_privacy == "public":
-                # Convert Distance to Relevance Score immediately
-                relevance = self._calculate_advanced_score(float(distance))
-                filtered_results.append((doc, relevance))
+            # Access Control: (Owner matches OR File is Public)
+            has_access = (doc_owner == username) or (doc_privacy == "public")
             
-            if len(filtered_results) >= 4: # Only keep Top 4 relevant chunks
-                break
-        
-        # 4. STRICT THRESHOLD CHECK (Safety Guardrail)
-        # If no documents found OR the best match is too weak (< 45% confidence)
-        if not filtered_results or filtered_results[0][1] < 45.0:
+            if has_access:
+                filtered_results.append((doc, distance))
+
+        # 3. Handle "No Access" or "No Relevance"
+        if not filtered_results:
              return {
-                "answer": "I could not find sufficiently relevant information in your documents to answer this question accurately.", 
+                "answer": "I couldn't find any relevant information in your accessible documents.", 
                 "sources": [], 
-                "confidence": 0.0 
+                "confidence": 0.0,
+                "retrieval_quality": 0.0
             }
 
-        # 5. Prepare Context for LLM
+        # 4. Advanced Source Selection (Top 3)
+        # Sort by distance (ASC) -> Lowest distance is best
+        filtered_results.sort(key=lambda x: x[1])
+        top_results = filtered_results[:3]
+
+        # Calculate weighted confidence
+        best_distance = top_results[0][1]
+        confidence = self._calculate_confidence(best_distance)
+        
+        # --- CRITICAL: THRESHOLD CHECK ---
+        # Agar best match bhi threshold se door hai, to reject kardo.
+        # This prevents Hallucinations on irrelevant queries.
+        if confidence < 45.0:  # If less than 45% sure
+            return {
+                "answer": "I searched the knowledge base, but couldn't find sufficiently relevant information to answer this reliably.",
+                "sources": [],
+                "confidence": confidence, # Show low score
+                "retrieval_quality": confidence
+            }
+
         context_text = ""
         sources = []
         
-        # Calculate Overall Confidence (Weighted Average of Top 2)
-        top_scores = [score for _, score in filtered_results[:2]]
-        avg_confidence = sum(top_scores) / len(top_scores) if top_scores else 0.0
-        
-        for doc, score in filtered_results:
-            source_label = f"{doc.metadata.get('source')} ({doc.metadata.get('privacy').upper()})"
-            context_text += f"\n---\nSource: {source_label}\nContent: {doc.page_content}"
+        for doc, dist in top_results:
+            score = self._calculate_confidence(dist)
+            source_name = f"{doc.metadata.get('source')} (Pg. {doc.metadata.get('page', 1)})"
+            
+            context_text += f"\n---\n[Source: {source_name}]\nContent: {doc.page_content}\n"
             
             sources.append({
-                "source": source_label, 
+                "source": source_name, 
                 "content": doc.page_content, 
-                "score": score  # Precision@k metric
+                "score": score
             })
 
-        # 6. LLM Generation
+        # 5. LLM Generation
         if provider == "openai":
             llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, openai_api_key=api_key)
         else:
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2, google_api_key=api_key)
 
+        # Advanced Prompt for Grounding
         prompt_template = """
-        You are a specialized Corporate RAG Assistant. 
-        Your task is to answer the user's question ONLY using the provided Context.
-        
+        You are a high-precision Corporate AI Assistant. Use the following retrieved Context to answer the user's question.
+
         STRICT RULES:
-        1. If the answer is NOT in the Context, explicitly say "I cannot find the answer in the provided documents."
-        2. Do not hallucinate or use outside knowledge.
-        3. Keep the tone professional and concise.
+        1. Answer ONLY using the information in the Context.
+        2. If the answer is not in the context, strictly say "I cannot find this information in the documents."
+        3. Cite your sources inline using brackets like [File.pdf].
+        4. Keep the tone professional and concise.
 
         Chat History:
         {history}
@@ -189,7 +194,7 @@ class RAGManager:
         Context:
         {context}
 
-        Question: {question}
+        User Question: {question}
 
         Answer:
         """
@@ -201,11 +206,11 @@ class RAGManager:
             response = llm.invoke(final_prompt)
             answer_text = response.content
         except Exception as e:
-            answer_text = f"Error generating response: {e}"
+            answer_text = f"Error generating response: {str(e)}"
 
         return {
             "answer": answer_text,
             "sources": sources,
-            "confidence": float(round(avg_confidence, 2))
+            "confidence": confidence,
+            "retrieval_quality": sum([s['score'] for s in sources]) / len(sources) # Avg Precision
         }
-
