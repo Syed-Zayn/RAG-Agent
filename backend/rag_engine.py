@@ -113,7 +113,7 @@ class RAGManager:
             }
 
         # 1. Retrieve Candidate Chunks
-        docs_and_scores = self.vector_store.similarity_search_with_score(query, k=10)
+        docs_and_scores = self.vector_store.similarity_search_with_score(query, k=20)
         
         filtered_results = []
         
@@ -216,3 +216,4 @@ class RAGManager:
             "confidence": float(confidence), # Double check cast
             "retrieval_quality": float(round(avg_precision, 2)) # Double check cast
         }
+
