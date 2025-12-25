@@ -29,7 +29,7 @@ class RAGManager:
         return None
     
     def _get_llm(self, provider, api_key, temperature=0.3):
-        # Temperature 0.3: Thoda creative hone do taake wo definition bana sake
+        # Temperature 0.3 allows for better synthesis of definitions
         if provider == "openai":
             return ChatOpenAI(model="gpt-4o-mini", temperature=temperature, openai_api_key=api_key)
         elif provider == "gemini":
@@ -38,13 +38,13 @@ class RAGManager:
 
     def _calculate_confidence(self, distance):
         """
-        DEMO-READY CONFIDENCE SCORING (High Scores for Relevant Docs)
+        DEMO-READY CONFIDENCE SCORING
         """
         try:
             dist = float(distance)
             if dist < 0: dist = 0.0
-            # Formula: 1 / (1 + (dist * 0.2)) -> Boosts score significantly
-            score = 1.0 / (1.0 + (dist * 0.2))
+            # Formula: 1 / (1 + (dist * 0.3)) -> Balanced scoring
+            score = 1.0 / (1.0 + (dist * 0.3))
             return float(round(score * 100, 2))
         except:
             return 0.0
@@ -113,9 +113,28 @@ class RAGManager:
         self.vector_store.save_local(DB_PATH)
         return len(splits)
 
+    # --- THIS WAS MISSING BEFORE ---
+    def _generate_query_variations(self, original_query, llm):
+        """
+        Generates synonyms/variations to improve search recall.
+        """
+        prompt = PromptTemplate(
+            input_variables=["question"],
+            template="""Generate 2 synonyms or related questions for: "{question}".
+            Example: "Cost" -> "Price", "Budget".
+            Keep it simple. Return only the questions separated by newlines."""
+        )
+        try:
+            response = llm.invoke(prompt.format(question=original_query))
+            variations = response.content.split('\n')
+            cleaned = [v.strip() for v in variations if v.strip()]
+            return cleaned[:2] 
+        except:
+            return [original_query]
+
     def get_answer(self, query, history, username, provider, api_key):
         embeddings = self._get_embeddings(provider, api_key)
-        llm = self._get_llm(provider, api_key, temperature=0.3) 
+        llm = self._get_llm(provider, api_key, temperature=0.3)
         
         if self.vector_store is None:
             self.load_existing_db(provider, api_key)
@@ -152,9 +171,8 @@ class RAGManager:
         if not top_results:
              return {"answer": "I couldn't find relevant info.", "sources": [], "confidence": 0.0}
 
-        # --- STEP 2: SCORES (Balanced Formula) ---
+        # --- STEP 2: SCORES ---
         best_distance = float(top_results[0][1])
-        # Thoda balance kiya: 0.2 ki jagah 0.3 (Taake garbage match 73% na ho, ~60% ho)
         try:
             score_val = 1.0 / (1.0 + (best_distance * 0.3))
             confidence = float(round(score_val * 100, 2))
@@ -209,13 +227,13 @@ class RAGManager:
         except Exception as e:
             answer_text = f"Error from LLM: {str(e)}"
 
-        # --- STEP 4: SMART OVERRIDE (The Fix) ---
-        # Agar AI ne bola "Cannot find", to Confidence ZERO kar do.
+        # --- STEP 4: SMART OVERRIDE ---
+        # If the LLM says it can't find info, force confidence to 0
         keywords = ["cannot find", "no information", "not mentioned", "does not contain"]
         if any(k in answer_text.lower() for k in keywords):
             confidence = 0.0
             avg_precision = 0.0
-            sources = [] # Hide sources to keep UI clean
+            sources = [] 
 
         return {
             "answer": answer_text,
@@ -223,5 +241,3 @@ class RAGManager:
             "confidence": confidence,
             "retrieval_quality": float(round(avg_precision, 2))
         }
-
-
